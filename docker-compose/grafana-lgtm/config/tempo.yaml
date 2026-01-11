@@ -1,0 +1,44 @@
+server:
+  http_listen_port: 3200
+  log_level: info
+
+
+distributor:
+  usage:
+    cost_attribution:
+      enabled: true
+  receivers: # this configuration will listen on all ports and protocols that tempo is capable of.
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+ingester:
+  trace_idle_period: 10s
+  max_block_bytes: 1_000_000
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    compaction_window: 1h
+    max_block_bytes: 100_000_000
+    block_retention: 1h
+    compacted_block_retention: 10m
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+
+overrides:
+  defaults:
+    cost_attribution:
+      dimensions:
+        service.name: "" # unscoped matches both resource and span attributes
+        span.http.target: "service_route" # span scoped attribute, also remapped to custom label in metrics.
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks] # enables metrics generator
+      generate_native_histograms: both

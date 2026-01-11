@@ -1,0 +1,173 @@
+version: '3.8'
+
+networks:
+  grafana-net:
+    driver: bridge
+
+services:
+  # ==========================================
+  # 1. APPLICATION (Shared Signals)
+  # ==========================================
+  ssf-app:
+    image: nevzatcirak/sharedsignals:latest
+    container_name: ssf-app
+    ports:
+      - "8181:8181"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - SERVER_PORT=8181
+      - TZ=Europe/Istanbul
+      - DB_URL=jdbc:postgresql://postgres:5432/sharedsignals
+      - DB_USERNAME=ssf_user
+      - DB_PASSWORD=ssf_password
+      - SSF_ISSUER_URL=https://ssf.nevzatcirak.com
+      - SHAREDSIGNALS_RATELIMIT_ENABLED=false
+      - OAUTH2_JWKS_URI=https://dev.nevzatcirak.com/oauth2/.well-known/jwks.json
+      - MANAGEMENT_OTLP_TRACING_ENDPOINT=http://otel-collector:4318/v1/traces
+      - MANAGEMENT_OTLP_METRICS_EXPORT_URL=http://otel-collector:4318/v1/metrics
+      - OTEL_LOGS_EXPORTER=none
+      - OTEL_RESOURCE_ATTRIBUTES=service.name=${SPRING_APPLICATION_NAME:-sharedsignals-transmitter},service.instance.id=${HOSTNAME}
+      - JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom
+    labels:
+      logging: "promtail"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          memory: 512M
+    depends_on:
+      - postgres
+      - tempo
+    networks:
+      - grafana-net
+
+  # ==========================================
+  # 2. DATABASE
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ssf-postgres
+    environment:
+      POSTGRES_USER: ssf_user
+      POSTGRES_PASSWORD: ssf_password
+      POSTGRES_DB: sharedsignals
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - grafana-net
+
+  # ==========================================
+  # 3. GRAFANA LGTM STACK (Observability)
+  # ==========================================
+
+  # TEMPO: Distributed tracing storage
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml
+      - tempo-data:/var/tempo
+    ports:
+      - "4317:4317" # otlp grpc
+      - "4318:4318" # otlp http
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - grafana-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.86.0
+    command: [ "--config=/etc/otel-collector.yaml" ]
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otel-collector.yaml
+    networks:
+      - grafana-net
+
+  # PROMETHEUS: Metrics scraper
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml
+      - prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--enable-feature=exemplar-storage'
+    networks:
+      - grafana-net
+
+  # GRAFANA: Visualization UI
+  grafana:
+    image: grafana/grafana:12.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - ./config/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./config/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+    networks:
+      - grafana-net
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./config/alertmanager.yml:/config/alertmanager.yml
+    command: --config.file=/config/alertmanager.yml
+    networks:
+      - grafana-net
+      
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/promtail.yaml:/etc/promtail/config.yaml
+    command: -config.file=/etc/promtail/config.yaml
+    networks:
+      - grafana-net
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    user: "0"
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/loki.yaml -target=all
+    volumes:
+      - ./config/loki.yaml:/etc/loki/loki.yaml
+      - loki:/tmp/loki
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - grafana-net
+
+volumes:
+  postgres_data:
+  prometheus:
+  grafana:
+  alertmanager-data:
+  tempo-data:
+  loki:
