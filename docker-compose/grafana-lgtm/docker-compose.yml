@@ -98,11 +98,13 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml
+      - ./config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./config/alert-rules.yml:/etc/prometheus/rules/alert-rules.yml:ro
       - prometheus:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=3d'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
       - '--enable-feature=exemplar-storage'

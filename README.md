@@ -275,6 +275,24 @@ A detailed write-up of this approach will be published as a **Medium article** b
 
 ---
 
+### Data Retention Policy
+
+This repository is configured with opinionated, resource-friendly retention defaults:
+
+- **Logs (Loki):** 3 days
+- **Traces (Tempo):** 1 day
+- **Metrics (Prometheus):** 3 days
+
+These values are chosen to balance:
+- Observability needs
+- Disk usage
+- Cost-awareness
+- SIEM / Security analysis readiness
+
+> ⚠️ Grafana itself does not store data. All retention policies are enforced at the backend level.
+
+---
+
 ## License
 
 Apache 2.0 License
