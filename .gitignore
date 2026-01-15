@@ -4,3 +4,4 @@
 *.sh
 *.txt
 
+docker-swarm/grafana-lgtm/observability

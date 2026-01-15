@@ -68,7 +68,7 @@ services:
 
   # TEMPO: Distributed tracing storage
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.9.0
     container_name: tempo
     command: [ "-config.file=/etc/tempo.yaml" ]
     volumes:
@@ -85,7 +85,7 @@ services:
       - grafana-net
 
   otel-collector:
-    image: otel/opentelemetry-collector:0.86.0
+    image: otel/opentelemetry-collector:0.109.0
     command: [ "--config=/etc/otel-collector.yaml" ]
     volumes:
       - ./config/otel-collector.yaml:/etc/otel-collector.yaml
@@ -113,7 +113,7 @@ services:
 
   # GRAFANA: Visualization UI
   grafana:
-    image: grafana/grafana:12.2.0
+    image: grafana/grafana:12.3.1
     ports:
       - "3000:3000"
     environment:
@@ -140,7 +140,7 @@ services:
       - grafana-net
       
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.3
     container_name: promtail
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -150,7 +150,7 @@ services:
       - grafana-net
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.6.3
     container_name: loki
     user: "0"
     ports:

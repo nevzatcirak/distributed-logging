@@ -18,15 +18,3 @@ scrape_configs:
     metrics_path: "/actuator/prometheus"
     static_configs:
       - targets: ["ssf-app:8181"]
-
-
-# Swarm (optional): scrape replicas via DNS service discovery
-# scrape_configs:
-#  - job_name: 'ssf-app'
-#    metrics_path: '/actuator/prometheus'
-#
-#    dns_sd_configs:
-#      - names:
-#          - 'tasks.ssf-app'
-#        type: 'A'
-#        port: 8181

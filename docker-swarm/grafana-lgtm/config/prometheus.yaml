@@ -1,0 +1,68 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # ---- Prometheus self ----
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+  - job_name: "ssf-app"
+    metrics_path: "/actuator/prometheus"
+    static_configs:
+      - targets: [ "ssf-app:8181" ]
+  - job_name: "otel-collector"
+    static_configs:
+      - targets: [ "otel-collector:8889" ]
+  # ---- Swarm tasks: scrape only services explicitly labeled metrics=prometheus ----
+  - job_name: swarm-tasks
+    dockerswarm_sd_configs:
+      - host: tcp://docker-socket-proxy-manager:2375
+        role: tasks
+        refresh_interval: 30s
+    relabel_configs:
+      # keep only running tasks with label metrics=prometheus
+      - source_labels: [__meta_dockerswarm_task_desired_state]
+        regex: running
+        action: keep
+      - source_labels: [__meta_dockerswarm_service_label_metrics]
+        regex: prometheus
+        action: keep
+
+      # metrics_path label'ı varsa uygula
+      - source_labels: [__meta_dockerswarm_service_label_metrics_path]
+        regex: (.+)
+        target_label: __metrics_path__
+        action: replace
+
+      # metrics_port varsa onu kullan
+      - source_labels: [__meta_dockerswarm_task_address, __meta_dockerswarm_service_label_metrics_port]
+        separator: ';'
+        regex: '(.+);(\d+)'
+        replacement: '$1:$2'
+        target_label: __address__
+        action: replace
+
+      # metrics_port yoksa 8080 varsay
+      - source_labels: [__meta_dockerswarm_task_address, __meta_dockerswarm_service_label_metrics_port]
+        separator: ';'
+        regex: '(.+);'
+        replacement: '$1:8080'
+        target_label: __address__
+        action: replace
+
+      # dashboard için standart label'lar
+      - source_labels: [__meta_dockerswarm_service_name]
+        target_label: service
+      - source_labels: [__meta_dockerswarm_task_id]
+        target_label: service_instance_id
+      - source_labels: [__address__]
+        target_label: instance

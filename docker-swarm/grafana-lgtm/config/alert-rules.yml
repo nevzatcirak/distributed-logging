@@ -1,0 +1,48 @@
+groups:
+  - name: lgtm-default
+    rules:
+      - alert: InstanceDown
+        expr: up{job="swarm-tasks"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instance down (service={{ $labels.service }}, instance_id={{ $labels.service_instance_id }})"
+          description: "Prometheus cannot scrape the target for > 1m."
+
+      - alert: HighHttpErrorRate
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{job="swarm-tasks",status=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_server_requests_seconds_count{job="swarm-tasks"}[5m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx rate (service={{ $labels.service }})"
+          description: "5xx ratio is > 5% for 5m."
+
+      - alert: HighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_server_requests_seconds_bucket{job="swarm-tasks"}[5m])) by (le, service)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 latency (service={{ $labels.service }})"
+          description: "p95 latency > 500ms for 5m."
+
+      - alert: JVMMemoryPressure
+        expr: |
+          (jvm_memory_used_bytes{job="swarm-tasks",area="heap"} / jvm_memory_max_bytes{job="swarm-tasks",area="heap"}) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM heap pressure (service={{ $labels.service }}, instance_id={{ $labels.service_instance_id }})"
+          description: "Heap usage > 85% for 10m."

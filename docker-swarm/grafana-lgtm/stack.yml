@@ -1,0 +1,470 @@
+version: "3.9"
+
+# Hardened Docker Swarm LGTM stack
+# - Network segmentation (edge/observability/telemetry)
+# - No direct docker.sock mounts (uses docker-socket-proxy)
+# - Secrets for credentials/webhooks
+# - Read-only configs where possible
+# - Placement constraints + resource limits
+# - Promtail/OTEL as global agents
+
+services:
+  ssf-app:
+    image: nevzatcirak/sharedsignals:distributed
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: "8181"
+      TZ: Europe/Istanbul
+      DB_URL: jdbc:postgresql://postgres:5432/sharedsignals
+      DB_USERNAME: ssf_user
+      DB_PASSWORD_FILE: /run/secrets/ssf_db_password
+
+      SSF_ISSUER_URL: https://ssf.nevzatcirak.com
+      SHAREDSIGNALS_RATELIMIT_ENABLED: "false"
+      OAUTH2_JWKS_URI: https://dev.nevzatcirak.com/oauth2/.well-known/jwks.json
+
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
+      OTEL_LOGS_EXPORTER: none
+
+      # NOTE: Swarm doesn't do ${HOSTNAME} the same way as compose sometimes,
+      # but it usually works. Kept as you provided.
+      OTEL_RESOURCE_ATTRIBUTES: service.name=sharedsignals-transmitter,service.instance.id=${HOSTNAME}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom
+    secrets:
+      - ssf_db_password
+    networks:
+      - monitoring
+      - observability
+      - telemetry
+      - edge
+    ports:
+      - target: 8181
+        published: 8181
+        protocol: tcp
+        mode: ingress
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        # log collection (your promtail filter)
+        logging: promtail
+
+        # metrics scrape (your prometheus filter)
+        metrics: prometheus
+        metrics_port: "8181"
+        metrics_path: /actuator/prometheus
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 512M
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ssf_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/ssf_db_password
+      POSTGRES_DB: sharedsignals
+    secrets:
+      - ssf_db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - telemetry
+      - observability
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.observability == true
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # ---- Docker API Proxy (restricts capabilities) ----
+  docker-socket-proxy-manager:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    networks:
+      - monitoring
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # allow only what our agents need
+      CONTAINERS: "1"
+      SERVICES: "1"
+      TASKS: "1"
+      INFO: "1"
+      NETWORKS: "1"
+      VERSION: "1"
+      NODES: "1"
+      # deny everything else
+      IMAGES: "0"
+      AUTH: "0"
+      SECRETS: "0"
+      SYSTEM: "0"
+      VOLUMES: "0"
+      EVENTS: "0"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+  docker-socket-proxy-node:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    networks:
+      - monitoring
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # allow only what our agents need
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      INFO: "1"
+      VERSION: "1"
+      # deny everything else
+      SERVICES: "0"
+      TASKS: "0"
+      NODES: "0"
+      IMAGES: "0"
+      AUTH: "0"
+      SECRETS: "0"
+      SYSTEM: "0"
+      VOLUMES: "0"
+      EVENTS: "0"
+    deploy:
+      mode: global
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+
+  # ---- Grafana ----
+  grafana:
+    image: grafana/grafana:12.3.1
+    networks:
+      - edge
+      - observability
+      - monitoring
+    ports:
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: ingress
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+      # PostgreSQL database
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: sharedsignals
+      GF_DATABASE_USER: ssf_user
+      GF_DATABASE_PASSWORD__FILE: /run/secrets/ssf_db_password
+      GF_DATABASE_SSL_MODE: disable
+    secrets:
+      - grafana_admin_password
+      - ssf_db_password
+    configs:
+      - source: grafana-datasources.yaml
+        target: /etc/grafana/provisioning/datasources/datasources.yaml
+        mode: 0444
+      - source: grafana-dashboards.yaml
+        target: /etc/grafana/provisioning/dashboards/dashboards.yaml
+        mode: 0444
+    volumes:
+      # grafana state
+      - grafana-data:/var/lib/grafana
+      # dashboard JSONs (provisioned)
+      - type: bind
+        source: ./dashboards
+        target: /opt/dashboards
+        read_only: true
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.observability == true
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ---- Prometheus ----
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    networks:
+      - monitoring
+      - observability
+      - telemetry
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yaml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=3d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    configs:
+      - source: prometheus.yaml
+        target: /etc/prometheus/prometheus.yaml
+        mode: 0444
+      - source: alert-rules.yml
+        target: /etc/prometheus/rules/alert-rules.yml
+        mode: 0444
+    volumes:
+      - type: bind
+        source: ./observability/prometheus
+        target: /prometheus
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.observability == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  # ---- Alertmanager ----
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    networks:
+      - edge
+      - observability
+    command: --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager
+    configs:
+      - source: alertmanager.yml
+        target: /etc/alertmanager/alertmanager.yml
+        mode: 0444
+    volumes:
+      - type: bind
+        source: ./observability/alertmanager
+        target: /alertmanager
+    deploy:
+      mode: replicated
+      replicas: 2
+      placement:
+        constraints:
+          - node.labels.observability == true
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ---- Loki ----
+  loki:
+    image: grafana/loki:3.6.3
+    networks:
+      - observability
+    command:
+      - "-config.file=/etc/loki/loki.yaml"
+    configs:
+      - source: loki.yaml
+        target: /etc/loki/loki.yaml
+        mode: 0444
+    volumes:
+      - type: bind
+        source: ./observability/loki
+        target: /var/loki
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.observability == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  # ---- Tempo ----
+  tempo:
+    image: grafana/tempo:2.9.0
+    networks:
+      - observability
+    command:
+      - "-config.file=/etc/tempo/tempo.yaml"
+    configs:
+      - source: tempo.yaml
+        target: /etc/tempo/tempo.yaml
+        mode: 0444
+    volumes:
+      - type: bind
+        source: ./observability/tempo
+        target: /var/tempo
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.observability == true
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  # ---- OpenTelemetry Collector (agent mode - per node) ----
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.109.0
+    networks:
+      - telemetry
+      - observability
+    command:
+      - "--config=/etc/otel/otel-collector.yaml"
+    configs:
+      - source: otel-collector.yaml
+        target: /etc/otel/otel-collector.yaml
+        mode: 0444
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ---- Promtail (per node) ----
+  promtail:
+    image: grafana/promtail:3.6.3
+    networks:
+      - monitoring
+      - observability
+    command:
+      - "-config.file=/etc/promtail/promtail.yaml"
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy-node:2375
+    configs:
+      - source: promtail.yaml
+        target: /etc/promtail/promtail.yaml
+        mode: 0444
+    volumes:
+      # state
+      - type: bind
+        source: ./observability/promtail
+        target: /run/promtail
+
+        # Promtail reads container logs from the node filesystem
+      - type: bind
+        source: /var/lib/docker/containers
+        target: /var/lib/docker/containers
+        read_only: true
+      - type: bind
+        source: /var/log
+        target: /var/log
+        read_only: true
+    deploy:
+      mode: global
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+
+configs:
+  prometheus.yaml:
+    file: ./config/prometheus.yaml
+  alert-rules.yml:
+    file: ./config/alert-rules.yml
+  alertmanager.yml:
+    file: ./config/alertmanager.yml
+  loki.yaml:
+    file: ./config/loki.yaml
+  promtail.yaml:
+    file: ./config/promtail.yaml
+  tempo.yaml:
+    file: ./config/tempo.yaml
+  otel-collector.yaml:
+    file: ./config/otel-collector.yaml
+  grafana-datasources.yaml:
+    file: ./config/grafana-datasources.yaml
+  grafana-dashboards.yaml:
+    file: ./config/grafana-dashboards.yaml
+
+secrets:
+  grafana_admin_password:
+    external: true
+  ssf_db_password:
+    external: true
+
+networks:
+  edge:
+    driver: overlay
+    attachable: false
+
+  observability:
+    driver: overlay
+    attachable: false
+    internal: true
+
+  telemetry:
+    driver: overlay
+    attachable: false
+    internal: true
+
+  monitoring:
+    driver: overlay
+    attachable: false
+    internal: true
+
+volumes:
+  grafana-data:
+    driver: local
+  postgres_data:
+    driver: local
