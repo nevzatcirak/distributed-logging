@@ -193,7 +193,7 @@ services:
         mode: 0444
     volumes:
       # grafana state
-      - grafana-data:/var/lib/grafana
+      - grafana_data:/var/lib/grafana
       # dashboard JSONs (provisioned)
       - type: bind
         source: ./dashboards
@@ -238,9 +238,7 @@ services:
         target: /etc/prometheus/rules/alert-rules.yml
         mode: 0444
     volumes:
-      - type: bind
-        source: ./observability/prometheus
-        target: /prometheus
+      - prometheus_data:/prometheus
     deploy:
       mode: replicated
       replicas: 1
@@ -269,9 +267,7 @@ services:
         target: /etc/alertmanager/alertmanager.yml
         mode: 0444
     volumes:
-      - type: bind
-        source: ./observability/alertmanager
-        target: /alertmanager
+      - alertmanager_data:/alertmanager
     deploy:
       mode: replicated
       replicas: 2
@@ -293,6 +289,7 @@ services:
   # ---- Loki ----
   loki:
     image: grafana/loki:3.6.3
+    user: "0"
     networks:
       - observability
     command:
@@ -302,9 +299,7 @@ services:
         target: /etc/loki/loki.yaml
         mode: 0444
     volumes:
-      - type: bind
-        source: ./observability/loki
-        target: /var/loki
+      - loki_data:/tmp/loki
     deploy:
       mode: replicated
       replicas: 1
@@ -333,9 +328,7 @@ services:
         target: /etc/tempo/tempo.yaml
         mode: 0444
     volumes:
-      - type: bind
-        source: ./observability/tempo
-        target: /var/tempo
+      - tempo_data:/var/tempo
     deploy:
       mode: replicated
       replicas: 1
@@ -391,11 +384,7 @@ services:
         target: /etc/promtail/promtail.yaml
         mode: 0444
     volumes:
-      # state
-      - type: bind
-        source: ./observability/promtail
-        target: /run/promtail
-
+      - promtail_data:/run/promtail
         # Promtail reads container logs from the node filesystem
       - type: bind
         source: /var/lib/docker/containers
@@ -464,7 +453,17 @@ networks:
     internal: true
 
 volumes:
-  grafana-data:
+  grafana_data:
+    driver: local
+  promtail_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  loki_data:
+    driver: local
+  tempo_data:
     driver: local
   postgres_data:
     driver: local

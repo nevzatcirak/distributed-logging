@@ -70,7 +70,6 @@ sudo mkdir -p ./observability/{prometheus,loki,tempo,alertmanager,promtail}
 
 ```bash
 sudo chmod -R 755 ./dashboards
-sudo chown -R root:root ./observability/{prometheus,loki,tempo,alertmanager,promtail}
 ```
 
 ---
