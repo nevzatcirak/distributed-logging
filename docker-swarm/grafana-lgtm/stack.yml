@@ -216,6 +216,12 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -h postgres -p 5432 -U ssf_user -d sharedsignals || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ---- Prometheus ----
   prometheus:
