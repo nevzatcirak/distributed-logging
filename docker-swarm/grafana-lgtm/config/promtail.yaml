@@ -7,57 +7,53 @@ positions:
   filename: /run/promtail/positions.yaml
 
 clients:
-  - url: http://loki:3100/loki/api/v1/push
+  - url: http://tasks.loki:3100/loki/api/v1/push
 
 scrape_configs:
   - job_name: docker-containers
     docker_sd_configs:
-#      - host: ${DOCKER_HOST}
-      - host: tcp://docker-socket-proxy-node:2375
-        refresh_interval: 10s
+#      - host: tcp://tasks.docker-socket-proxy-node:2375
+#        port: 2375
+#        refresh_interval: 10s
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+
+#    pipeline_stages:
+#      - json:
+#          expressions:
+#            service: service_name
+#
+#      - labels:
+#          service:
+
     relabel_configs:
-      # --- KEEP only containers explicitly labeled logging=promtail ---
       - source_labels: [__meta_docker_container_label_logging]
         regex: promtail
         action: keep
 
-      # --- service name from swarm label ---
-      - source_labels: [__meta_docker_container_label_com_docker_swarm_service_name]
+      - source_labels: [__meta_docker_container_log_path]
+        target_label: __path__
+
+      # service name (swarm)
+      - source_labels: [__meta_docker_container_name]
         target_label: service
-        action: replace
 
       # --- (optional) stack namespace ---
       - source_labels: [__meta_docker_container_label_com_docker_stack_namespace]
         target_label: stack
-        action: replace
 
       # --- instance (container name without leading /) ---
-      - source_labels: [__meta_docker_container_name]
+      - source_labels: [__meta_docker_container_id]
         regex: '/(.*)'
         target_label: instance
         replacement: '$1'
-        action: replace
 
-      - source_labels: [__meta_docker_container_label_com_docker_swarm_task_id]
-        target_label: service_instance_id
-        action: replace
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
 
-      - source_labels: [service_instance_id, __meta_docker_container_id]
+      - source_labels: [ __meta_docker_container_id ]
         separator: ';'
         regex: '^$;(.{12}).*'
         target_label: service_instance_id
         replacement: '$1'
-        action: replace
 
-      # --- CRITICAL: tell promtail where container json logs are ---
-      - source_labels: [__meta_docker_container_id]
-        target_label: __path__
-        replacement: /var/lib/docker/containers/$1/$1-json.log
-        action: replace
-
-    pipeline_stages:
-      - json:
-          expressions:
-            log: log
-      - output:
-          source: log

@@ -101,6 +101,7 @@ services:
       NETWORKS: "1"
       VERSION: "1"
       NODES: "1"
+      SWARM: "1"
       # deny everything else
       IMAGES: "0"
       AUTH: "0"
@@ -135,6 +136,8 @@ services:
       NETWORKS: "1"
       INFO: "1"
       VERSION: "1"
+      SWARM: "1"
+      EVENTS: "1"
       # deny everything else
       SERVICES: "0"
       TASKS: "0"
@@ -144,7 +147,6 @@ services:
       SECRETS: "0"
       SYSTEM: "0"
       VOLUMES: "0"
-      EVENTS: "0"
     deploy:
       mode: global
       restart_policy:
@@ -201,7 +203,7 @@ services:
         read_only: true
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 1
       placement:
         constraints:
           - node.labels.observability == true
@@ -216,12 +218,6 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -h postgres -p 5432 -U ssf_user -d sharedsignals || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
 
   # ---- Prometheus ----
   prometheus:
@@ -276,7 +272,7 @@ services:
       - alertmanager_data:/alertmanager
     deploy:
       mode: replicated
-      replicas: 2
+      replicas: 1
       placement:
         constraints:
           - node.labels.observability == true
@@ -306,6 +302,11 @@ services:
         mode: 0444
     volumes:
       - loki_data:/tmp/loki
+    ports:
+      - target: 3100
+        published: 3100
+        protocol: tcp
+        mode: ingress
     deploy:
       mode: replicated
       replicas: 1
@@ -384,22 +385,14 @@ services:
     command:
       - "-config.file=/etc/promtail/promtail.yaml"
     environment:
-      DOCKER_HOST: tcp://docker-socket-proxy-node:2375
+      DOCKER_HOST: http://docker-socket-proxy-node:2375
     configs:
       - source: promtail.yaml
         target: /etc/promtail/promtail.yaml
         mode: 0444
     volumes:
       - promtail_data:/run/promtail
-        # Promtail reads container logs from the node filesystem
-      - type: bind
-        source: /var/lib/docker/containers
-        target: /var/lib/docker/containers
-        read_only: true
-      - type: bind
-        source: /var/log
-        target: /var/log
-        read_only: true
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     deploy:
       mode: global
       restart_policy:
